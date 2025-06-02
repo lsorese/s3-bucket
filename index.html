@@ -105,11 +105,36 @@
             border: 1px solid #eee;
             border-radius: 5px;
             background-color: #fff;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .file-details {
+            flex-grow: 1;
         }
         .file-status {
             margin-top: 5px;
             font-size: 14px;
             color: #007bff;
+        }
+        .file-remove {
+            background: #f8f9fa;
+            border: 1px solid #eee;
+            color: #dc3545;
+            border-radius: 50%;
+            width: 28px;
+            height: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-weight: bold;
+            margin-left: 10px;
+            transition: all 0.2s;
+        }
+        .file-remove:hover {
+            background: #dc3545;
+            color: white;
         }
         .final-url {
             background: #e9ecef;
@@ -198,6 +223,15 @@
         fileInput.addEventListener('change', handleFileSelect);
         uploadBtn.addEventListener('click', handleUpload);
         clearBtn.addEventListener('click', clearSelection);
+        
+        // Delegate event listener for file removal buttons
+        fileList.addEventListener('click', (e) => {
+            if (e.target.classList.contains('file-remove') || e.target.parentElement.classList.contains('file-remove')) {
+                const button = e.target.classList.contains('file-remove') ? e.target : e.target.parentElement;
+                const fileId = button.getAttribute('data-file-id');
+                removeFile(fileId);
+            }
+        });
 
         function handleDragOver(e) {
             e.preventDefault();
@@ -221,11 +255,7 @@
         }
 
         function processFiles(files) {
-            // Clear previous selection
-            selectedFiles = [];
-            fileList.innerHTML = '';
-            
-            // Process each file
+            // Process each file (appending to existing selection)
             let validFilesCount = 0;
             
             Array.from(files).forEach(file => {
@@ -235,22 +265,33 @@
                     return;
                 }
                 
-                selectedFiles.push(file);
+                // Generate a unique ID for this file
+                const fileId = `file-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+                
+                // Store file with its ID
+                selectedFiles.push({
+                    id: fileId,
+                    file: file
+                });
                 validFilesCount++;
                 
                 // Add file to the list
                 const fileItem = document.createElement('div');
                 fileItem.className = 'file-item';
+                fileItem.dataset.fileId = fileId;
                 fileItem.innerHTML = `
-                    <strong>${file.name}</strong> (${formatFileSize(file.size)}) - ${file.type}
-                    <div class="file-status" data-filename="${file.name}">Pending</div>
+                    <div class="file-details">
+                        <strong>${file.name}</strong> (${formatFileSize(file.size)}) - ${file.type}
+                        <div class="file-status" data-filename="${file.name}">Pending</div>
+                    </div>
+                    <div class="file-remove" data-file-id="${fileId}">✕</div>
                 `;
                 fileList.appendChild(fileItem);
             });
             
             // Update file count
             fileCount.textContent = selectedFiles.length;
-            fileInfo.style.display = 'block';
+            fileInfo.style.display = selectedFiles.length > 0 ? 'block' : 'none';
             
             // Enable upload button if we have valid files
             uploadBtn.disabled = selectedFiles.length === 0;
@@ -258,6 +299,29 @@
             // Hide previous results
             results.style.display = 'none';
             hideStatus();
+        }
+        
+        function removeFile(fileId) {
+            // Find the index of the file in selectedFiles array
+            const fileIndex = selectedFiles.findIndex(item => item.id === fileId);
+            
+            if (fileIndex !== -1) {
+                // Remove from the array
+                selectedFiles.splice(fileIndex, 1);
+                
+                // Remove from the DOM
+                const fileItem = document.querySelector(`.file-item[data-file-id="${fileId}"]`);
+                if (fileItem) {
+                    fileItem.remove();
+                }
+                
+                // Update file count
+                fileCount.textContent = selectedFiles.length;
+                fileInfo.style.display = selectedFiles.length > 0 ? 'block' : 'none';
+                
+                // Disable upload button if no files remain
+                uploadBtn.disabled = selectedFiles.length === 0;
+            }
         }
 
         function clearSelection() {
@@ -284,7 +348,8 @@
                 let completedUploads = 0;
                 
                 // Process each file
-                const uploadPromises = selectedFiles.map(async (file) => {
+                const uploadPromises = selectedFiles.map(async (fileObj) => {
+                    const file = fileObj.file;
                     try {
                         // Update file status
                         updateFileStatus(file.name, 'Getting URL...');
