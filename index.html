@@ -276,18 +276,56 @@
             const encodedFiletype = encodeURIComponent(filetype);
             const url = `${BE_URL}/api/s3/presigned-url?filename=${filename}&filetype=${encodedFiletype}`;
             
-            const response = await fetch(url, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json'
-                }
-            });
+            // Try different HTTP methods in case PUT isn't supported
+            const methods = ['GET', 'POST', 'PUT'];
+            let lastError = null;
             
-            if (!response.ok) {
-                throw new Error(`Failed to get presigned URL: ${response.status} ${response.statusText}`);
+            for (const method of methods) {
+                try {
+                    console.log(`Trying ${method} method...`);
+                    
+                    const requestOptions = {
+                        method: method,
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    };
+                    
+                    // For POST, we might need to send data in body instead of query params
+                    if (method === 'POST') {
+                        requestOptions.body = JSON.stringify({
+                            filename: filename,
+                            filetype: filetype
+                        });
+                        // Remove query params for POST and use body instead
+                        const response = await fetch(`${BE_URL}/api/s3/presigned-url`, requestOptions);
+                        
+                        if (response.ok) {
+                            console.log(`Success with ${method} method`);
+                            return await response.json();
+                        }
+                        
+                        console.log(`${method} failed:`, response.status, response.statusText);
+                        lastError = new Error(`${method} failed: ${response.status} ${response.statusText}`);
+                    } else {
+                        // For GET and PUT, use query params
+                        const response = await fetch(url, requestOptions);
+                        
+                        if (response.ok) {
+                            console.log(`Success with ${method} method`);
+                            return await response.json();
+                        }
+                        
+                        console.log(`${method} failed:`, response.status, response.statusText);
+                        lastError = new Error(`${method} failed: ${response.status} ${response.statusText}`);
+                    }
+                } catch (error) {
+                    console.log(`${method} error:`, error.message);
+                    lastError = error;
+                }
             }
             
-            return await response.json();
+            throw lastError || new Error('All HTTP methods failed');
         }
 
         async function uploadToS3(uploadURL, file, headers) {
