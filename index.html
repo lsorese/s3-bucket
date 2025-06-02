@@ -99,6 +99,18 @@
             margin: 15px 0;
             display: none;
         }
+        .file-item {
+            padding: 10px;
+            margin: 5px 0;
+            border: 1px solid #eee;
+            border-radius: 5px;
+            background-color: #fff;
+        }
+        .file-status {
+            margin-top: 5px;
+            font-size: 14px;
+            color: #007bff;
+        }
         .final-url {
             background: #e9ecef;
             padding: 15px;
@@ -121,16 +133,15 @@
         <p>Select an image file to upload using the S3 presigned URL flow.</p>
         
         <div class="upload-area" id="uploadArea">
-            <p>📁 Drop an image here or click to select</p>
+            <p>📁 Drop images here or click to select</p>
             <p style="color: #666; font-size: 14px;">Supports: PNG, JPG, JPEG, GIF, WebP</p>
         </div>
         
-        <input type="file" id="fileInput" class="file-input" accept="image/*">
+        <input type="file" id="fileInput" class="file-input" accept="image/*" multiple>
         
         <div class="file-info" id="fileInfo">
-            <strong>Selected file:</strong> <span id="fileName"></span><br>
-            <strong>Size:</strong> <span id="fileSize"></span><br>
-            <strong>Type:</strong> <span id="fileType"></span>
+            <strong>Selected files:</strong> <span id="fileCount">0</span> files<br>
+            <div id="fileList"></div>
         </div>
         
         <button class="upload-btn" id="uploadBtn" disabled>Upload to S3</button>
@@ -144,10 +155,10 @@
         
         <div id="results" style="display: none;">
             <h3>Upload Successful! 🎉</h3>
-            <p><strong>Final Image URL:</strong></p>
-            <div class="final-url" id="finalUrl"></div>
+            <p><strong>Final Image URLs:</strong></p>
+            <div id="uploadedUrls"></div>
             <p style="color: #666; font-size: 14px;">
-                This is the clean URL (without query params) that you would include in your form submission payload.
+                These are the clean URLs (without query params) that you would include in your form submission payload.
             </p>
         </div>
         
@@ -170,15 +181,14 @@
         const clearBtn = document.getElementById('clearBtn');
         const status = document.getElementById('status');
         const fileInfo = document.getElementById('fileInfo');
-        const fileName = document.getElementById('fileName');
-        const fileSize = document.getElementById('fileSize');
-        const fileType = document.getElementById('fileType');
+        const fileCount = document.getElementById('fileCount');
+        const fileList = document.getElementById('fileList');
         const progressBar = document.getElementById('progressBar');
         const progressFill = document.getElementById('progressFill');
         const results = document.getElementById('results');
-        const finalUrl = document.getElementById('finalUrl');
+        const uploadedUrls = document.getElementById('uploadedUrls');
         
-        let selectedFile = null;
+        let selectedFiles = [];
 
         // File selection handlers
         uploadArea.addEventListener('click', () => fileInput.click());
@@ -199,34 +209,51 @@
             uploadArea.classList.remove('dragover');
             const files = e.dataTransfer.files;
             if (files.length > 0) {
-                processFile(files[0]);
+                processFiles(files);
             }
         }
 
         function handleFileSelect(e) {
-            const file = e.target.files[0];
-            if (file) {
-                processFile(file);
+            const files = e.target.files;
+            if (files.length > 0) {
+                processFiles(files);
             }
         }
 
-        function processFile(file) {
-            // Validate file type
-            if (!file.type.startsWith('image/')) {
-                showStatus('Please select an image file.', 'error');
-                return;
-            }
-
-            selectedFile = file;
+        function processFiles(files) {
+            // Clear previous selection
+            selectedFiles = [];
+            fileList.innerHTML = '';
             
-            // Show file info
-            fileName.textContent = file.name;
-            fileSize.textContent = formatFileSize(file.size);
-            fileType.textContent = file.type;
+            // Process each file
+            let validFilesCount = 0;
+            
+            Array.from(files).forEach(file => {
+                // Validate file type
+                if (!file.type.startsWith('image/')) {
+                    showStatus('Please select only image files.', 'error');
+                    return;
+                }
+                
+                selectedFiles.push(file);
+                validFilesCount++;
+                
+                // Add file to the list
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-item';
+                fileItem.innerHTML = `
+                    <strong>${file.name}</strong> (${formatFileSize(file.size)}) - ${file.type}
+                    <div class="file-status" data-filename="${file.name}">Pending</div>
+                `;
+                fileList.appendChild(fileItem);
+            });
+            
+            // Update file count
+            fileCount.textContent = selectedFiles.length;
             fileInfo.style.display = 'block';
             
-            // Enable upload button
-            uploadBtn.disabled = false;
+            // Enable upload button if we have valid files
+            uploadBtn.disabled = selectedFiles.length === 0;
             
             // Hide previous results
             results.style.display = 'none';
@@ -234,8 +261,10 @@
         }
 
         function clearSelection() {
-            selectedFile = null;
+            selectedFiles = [];
             fileInput.value = '';
+            fileList.innerHTML = '';
+            fileCount.textContent = '0';
             fileInfo.style.display = 'none';
             uploadBtn.disabled = true;
             results.style.display = 'none';
@@ -244,28 +273,67 @@
         }
 
         async function handleUpload() {
-            if (!selectedFile) return;
+            if (selectedFiles.length === 0) return;
 
             try {
                 uploadBtn.disabled = true;
-                showStatus('Getting presigned URL...', 'info');
-                
-                // Step 1: Get presigned URL
-                const presignedData = await getPresignedUrl(selectedFile.name, selectedFile.type);
-                
-                showStatus('Uploading to S3...', 'info');
+                showStatus(`Uploading ${selectedFiles.length} files...`, 'info');
                 showProgress();
                 
-                // Step 2: Upload to S3
-                await uploadToS3(presignedData.uploadURL, selectedFile, presignedData.headers);
+                const uploadedFileUrls = [];
+                let completedUploads = 0;
                 
-                // Step 3: Show final URL
-                const cleanUrl = `https://the-row-public-assets.s3.amazonaws.com/${presignedData.key}`;
-                showSuccess(cleanUrl);
+                // Process each file
+                const uploadPromises = selectedFiles.map(async (file) => {
+                    try {
+                        // Update file status
+                        updateFileStatus(file.name, 'Getting URL...');
+                        
+                        // Step 1: Get presigned URL
+                        const presignedData = await getPresignedUrl(file.name, file.type);
+                        
+                        // Update file status
+                        updateFileStatus(file.name, 'Uploading...');
+                        
+                        // Step 2: Upload to S3
+                        await uploadToS3(presignedData.uploadURL, file, presignedData.headers);
+                        
+                        // Step 3: Save the clean URL
+                        const cleanUrl = `https://the-row-public-assets.s3.amazonaws.com/${presignedData.key}`;
+                        uploadedFileUrls.push({
+                            name: file.name,
+                            url: cleanUrl
+                        });
+                        
+                        // Update progress
+                        completedUploads++;
+                        updateProgress(completedUploads, selectedFiles.length);
+                        
+                        // Update file status
+                        updateFileStatus(file.name, 'Completed');
+                        
+                        return cleanUrl;
+                    } catch (error) {
+                        console.error(`Upload failed for ${file.name}:`, error);
+                        updateFileStatus(file.name, `Failed: ${error.message}`);
+                        throw error;
+                    }
+                });
+                
+                // Wait for all uploads to complete
+                await Promise.allSettled(uploadPromises);
+                
+                // Show results
+                if (uploadedFileUrls.length > 0) {
+                    showSuccess(uploadedFileUrls);
+                    showStatus(`Successfully uploaded ${uploadedFileUrls.length} of ${selectedFiles.length} files`, 'success');
+                } else {
+                    showStatus('All uploads failed', 'error');
+                }
                 
             } catch (error) {
-                console.error('Upload failed:', error);
-                showStatus(`Upload failed: ${error.message}`, 'error');
+                console.error('Upload process failed:', error);
+                showStatus(`Upload process failed: ${error.message}`, 'error');
             } finally {
                 uploadBtn.disabled = false;
                 hideProgress();
@@ -350,9 +418,30 @@
             status.style.display = 'none';
         }
 
+        function updateFileStatus(filename, statusText) {
+            const statusElement = document.querySelector(`.file-status[data-filename="${filename}"]`);
+            if (statusElement) {
+                statusElement.textContent = statusText;
+                
+                // Add appropriate classes based on status
+                if (statusText === 'Completed') {
+                    statusElement.style.color = '#28a745';
+                } else if (statusText.startsWith('Failed')) {
+                    statusElement.style.color = '#dc3545';
+                } else {
+                    statusElement.style.color = '#007bff';
+                }
+            }
+        }
+        
+        function updateProgress(completed, total) {
+            const percentage = Math.round((completed / total) * 100);
+            progressFill.style.width = `${percentage}%`;
+        }
+        
         function showProgress() {
             progressBar.style.display = 'block';
-            progressFill.style.width = '70%';
+            progressFill.style.width = '0%';
         }
 
         function hideProgress() {
@@ -360,10 +449,20 @@
             progressFill.style.width = '0%';
         }
 
-        function showSuccess(url) {
-            finalUrl.textContent = url;
+        function showSuccess(fileUrls) {
+            uploadedUrls.innerHTML = '';
+            
+            fileUrls.forEach(file => {
+                const urlElement = document.createElement('div');
+                urlElement.className = 'final-url';
+                urlElement.innerHTML = `
+                    <strong>${file.name}:</strong><br>
+                    ${file.url}
+                `;
+                uploadedUrls.appendChild(urlElement);
+            });
+            
             results.style.display = 'block';
-            showStatus('Upload completed successfully!', 'success');
         }
 
         function formatFileSize(bytes) {
